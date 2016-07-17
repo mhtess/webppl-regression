@@ -1,0 +1,21 @@
+var model = function() {
+  var m = sample(UniformDrift({a:-25, b:25, r: 2}));
+  var b = sample(UniformDrift({a:-25, b:25, r: 2}));
+  var sigma = sample(UniformDrift({a:0, b:50, r:2}));
+
+  var linearFunction = function(x){
+     return m*x + b;
+  };
+
+  foreach(observed_data, function(dataPoint){
+    var x = dataPoint["x"];
+    var y = dataPoint["y"];
+    var predictedY = linearFunction(x);
+    observe({
+      data: y,
+      link: Gaussian({mu: predictedY, sigma: sigma})
+    });
+  });
+
+  return {slope: m, intercept: b, noise: sigma};
+};

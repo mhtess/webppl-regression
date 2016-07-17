@@ -1,0 +1,320 @@
+---
+title: "Regression tutorial"
+author: "M. H. Tessler and Robert Hawkins"
+date: "June 26, 2016"
+output: html_document
+---
+
+This regression tutorial uses the probabilsitic programming language [WebPPL](http://webppl.org), accessed through the R package [RWebPPL](https://github.com/mhtess/rwebppl). The latter half of this tutorial is based on a tutorial article by Sorensen, Hohenstein, and Vasishth --- [git repo](https://github.com/vasishth/BayesLMMTutorial)
+
+
+```{r}
+library(rwebppl)
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+library(coda)
+library(lme4)
+
+setwd("~/Repos/webppl-regression")
+
+estimate_mode <- function(s) {
+  d <- density(s)
+  return(d$x[which.max(d$y)])
+}
+
+HPDhi<- function(s){
+  m <- HPDinterval(mcmc(s))
+  return(m["var1","upper"])
+}
+
+HPDlo<- function(s){
+  m <- HPDinterval(mcmc(s))
+  return(m["var1","lower"])
+}
+
+runModelMCMC <- function(model, data_to_webppl, 
+                         numSamples = 50000) {
+  wp <- webppl(
+    program_file = model,
+    data = data_to_webppl,
+    data_var = "observed_data", 
+    inference_opts = list(method="MCMC", 
+                          samples = numSamples, 
+                          burn = numSamples/2,
+                          verbose = TRUE),
+    model_var = "model",
+    output_format = "samples",
+    packages = c("./utils")
+    )
+}
+
+```
+
+# Linear regression
+
+```{r}
+numSamples = 500000
+observed_data <- data.frame(x = c(0,1,2,3), y = c(0,1,4,6));
+res <- runModelMCMC("webppl_models/linearRegression.wppl", 
+                    observed_data, numSamples = numSamples) 
+
+res %>%
+  gather(parameter, value) %>%
+  mutate(parameter = factor(parameter, 
+                            levels = c("intercept", "slope", "noise"))) %>%
+  ggplot(aes(x = value))+
+    geom_histogram()+
+    facet_wrap(~parameter, scales = 'free')
+
+res %>% 
+  gather(parameter, value) %>%
+  group_by(parameter) %>%
+  summarize(mode = estimate_mode(value),
+            md_lo = round(HPDlo(value), 3),
+            md_hi = round(HPDhi(value), 3))
+```
+
+Visualize predictives
+
+```{r}
+ggplot(observed_data, aes(x = x,  y = y)) +
+  geom_abline(data = sample_n(res, 400), 
+              aes(intercept = intercept, slope = slope),
+              alpha = .1) +
+  geom_point(size = 10, color = "red") +
+  geom_smooth(method = "lm", se = F, size = 2, color = "green") +
+  ylab("y") +
+  xlab("x") +
+  xlim(-2, 8) +
+  ylim(-2, 8) +
+  theme_bw() 
+```
+
+# Logistic regression
+
+In psychology, our dependent meaures are often *categorical* (e.g., did the participant behave prosocially vs. not? did the child interpret the evidence pragmatically vs. not? ...). For these problems, a special type of regression model is used: logistic regression (also called logit regression, which is somewhat funny because the logit function is the opposite of the logistic function).
+
+You should be familiar with the [logistic function](https://en.wikipedia.org/wiki/Logistic_function), as it is very often used in modeling (no less in logistic regression). (It is also called a sigmoid function). It is an S-shaped curve, and it is a mapping from the real numbers (which can range from -Infinity to +Infinity) to numbers between 0 - 1 (aka probabilities). The opposite of the logistic function is a [logit function](https://en.wikipedia.org/wiki/Logit).
+
+```{r}
+numSamples = 100000
+
+observed_data <- data.frame(x = seq(-5,5), y = c(T,T,T,T,T,F,T,F,F,F,F))
+res <- runModelMCMC("webppl_models/logisticRegression.wppl", 
+                    observed_data, numSamples = numSamples)
+
+res %>%
+  gather(parameter, value) %>%
+  mutate(parameter = factor(parameter, 
+                            levels = c("intercept", "slope", "noise"))) %>%
+  ggplot(aes(x = value))+
+    geom_histogram()+
+    facet_wrap(~parameter, scales = 'free')
+
+res %>% 
+  gather(parameter, value) %>%
+  group_by(parameter) %>%
+  summarize(mode = estimate_mode(value),
+            md_lo = round(HPDlo(value), 3),
+            md_hi = round(HPDhi(value), 3))
+```
+
+Recall that our regression parameters had to be passed through a logistic function in order to make contact with our data. Another way we could have done this is to pass our data through the logit function. (Logit is the inverse of logisitic.) From this way of looking at it, the regression parameters are logit-transforms from the data-space. Recall, `logit(p) = log(p / (1-p))`.
+
+The estimated intercept gives us the logarithm of the probability that 0 will be T divided by the probabiltiy that 0 will be F. (We're talking about 0 because this is the intercept). The ratio of probabilities is called the *odds*, and the logarithm of this ratio is called the *log odds*. The parameters are easier to interpret in terms of the odds, which we can get by exponentiating the value. 
+
+The MAP estimate of the intercept (i.e., the mode) is very large, and so `exp(intercept)` will be massive, meaning the odds are exceedingly in favor of 0 being T! But notice that the credible interval ranges from about -70 to 200. `exp(-70)` will be super small, meaning that the odds are strongly in favor of 0 being F. Examine `observed_data` and explain why this is.
+
+...
+
+The estimated slope gives us the *change in log odds for a 1-unit change in x*. Again, we will want to `exp(...)` this number to get the odds ratio. Note that our posterior estimate for the slope is highly negative, hence we expect to see a dramatic *decrease* in the odds of being T as x increases. Do you understand why this is true?
+
+We have a lot more uncertainty about the intercept than about the slope, at least in terms of the *qualitative* direction (i.e., > or < 0). Why do you think that is?
+
+...
+
+
+# Visualize predictives
+
+
+```{r}
+logisticFunction <- function(x) {
+   return(1 / (1 + exp(-x)));
+};
+
+# TODO: find better way of plotting sigmoidal predictives... 
+resSubsamples <- sample_n(res, 500)
+g <- ggplot(observed_data, aes(x = x, y = as.integer(y))) + theme_bw()
+xs = seq(-6, 6, 0.01) 
+for(i in 1:dim(resSubsamples)[1]) {
+  row <- resSubsamples[i,]
+  slope <- as.numeric(row["slope"])
+  intercept <- as.numeric(row["intercept"])
+  predicted_ys = intercept + slope * xs
+  transformed_ys = logisticFunction(predicted_ys)
+  g <- g + geom_line(data = data.frame(x = xs, y = transformed_ys),
+                aes(x = x, y = y), alpha = .2)
+}
+g + geom_point(size = 10, color = "red") 
+```
+
+Indeed, we see that while there is quite a bit of variability in our posterior predictive, most of the logistic curves are going from positive to negative very rapidly, and this is most often happening between x = 0 and x = 2, corresponding to the cutpoint we see in our data.
+
+Compare to:
+
+```{r}
+summary(glm(y ~ x, data = observed_data, family = 'binomial'))
+```
+
+### Gibson & Wu (2012) -- Fixed effects
+
+Now that we understand a what a simple linear regression looks like from a Bayesian viewpoint, we are ready to turn to the mixed-model example from Sorensen et al (2016). In this tutorial, we build up a progressively more complex Bayesian mixed-effects model on a real-world data set. 
+
+The simplest model is a purely fixed effects model, where we assume that all data points are independent (i.e. have uncorrelated noise). The only additional change from the model above is that we assume reaction times are *log-normal*, meaning that the logarithm of the reaction times follows a normal distribution. We do this simply by taking the log of the input reaction times. 
+
+Note that in this data set, each individual gives responses for many different items. Only taking into account fixed-effects might be a bad assumption. We will explore taking into account random-effects later.
+
+```{r}
+numSamples = 10000
+GibsonWuData = read.table("data/gibsonwu2012data.txt", header = T) %>%
+  filter(region == "headnoun") %>%
+  mutate(subj = as.integer(factor(subj)),
+         item = as.integer(factor(item)),
+         so = ifelse(type == "subj-ext", -1, 1)) %>%
+  mutate(rowNum = row_number()) %>%
+  select(rowNum, subj, item, so, type, rt)
+
+
+ggplot(GibsonWuData, aes(x = rt, fill = type))+
+  geom_histogram(position = position_dodge())#+
+  #xlim(0, 2000)
+
+ggplot(GibsonWuData, aes(x = log(rt), fill = type))+
+  geom_histogram(position = position_dodge())
+```
+
+
+```{r}
+res.fixed <- runModelMCMC("webppl_models/fixedEffects.wppl", 
+                    GibsonWuData, numSamples = numSamples)
+
+res.fixed %>%
+  gather(parameter, value, b_0, b_1, sigma) %>%
+  ggplot(aes(x = value))+
+    geom_histogram()+
+    facet_wrap(~parameter, scales = 'free')
+
+res.fixed %>% 
+  gather(parameter, value, b_0, b_1, sigma) %>%
+  group_by(parameter) %>%
+  summarize(mode = estimate_mode(value),
+            md_lo = round(HPDlo(value), 3),
+            md_hi = round(HPDhi(value), 3))
+```
+
+# Predictives
+
+To evaluate how well our model fits the data, we plot the MAP estimate of our model's posterior predictions on the x axis with the original data on the y axis. 
+
+```{r}
+modelVsData <- res.fixed %>%
+  select(-sigma, -b_0, -b_1) %>%
+  gather(parameter, value) %>%
+  group_by(parameter) %>%
+  summarize(MAP = estimate_mode(value)) %>%
+#           credHigh = HPDhi(value),
+#           credLow = HPDlo(value))
+  mutate(rowNum = as.integer(substr(parameter, 2, 5))) %>%
+  left_join(GibsonWuData, by = c("rowNum"))
+
+ggplot(modelVsData, aes(x = MAP,  y = log(rt), group = type)) +
+  geom_point(aes(color = type)) +
+  ylab("empirical RT") +
+  xlab("model predictive (MAP)") +
+  theme_bw() 
+```
+
+Our model has a fixed intercept of 6.02, which we see is the grand mean (because we used effect coding). Additionally, the `subj-ext` group is predicted to have a slightly higher RT than the `obj-ext` group. 
+
+Note, however, that there's an enormous amount of variability within these two groups that we aren't capturing. 
+
+### Gibson & Wu (2012) -- Random intercepts
+
+The problem with a pure fixed-effects model in this data set is that our observations are probably clustered in an obvious way: multiple observations from the same participant or for the same item may be correlated. Above, we assumed the noise in responses was sampled from a single Gaussian distribution (thus, our observations were independent, or we had uncorrelated noise). But some people may just be slower than other people, or some items may just be harder. To account for this variance, we move to the land of mixed- models: adding subject-level and item-level intercepts. 
+
+
+```{r}
+numSamples = 500
+
+# if it runs with acc. ratio = 0.5 (or ratio = 1) for more than 100 iterations
+# kill it and retry
+### Note that in the current version of RWebPPL,
+# you must open up Activity Monitor and manually kill the "node" process
+# in addition to killing the process in R
+
+res.mixed <- webppl(
+    program_file = "webppl_models/varyingIntercepts.wppl",
+    data = GibsonWuData,
+    data_var = "observed_data",
+    inference_opts = list(method="MCMC", 
+                             kernel = list(HMC = 
+                                      list(steps = 5,
+                                           stepSize = 0.015)),
+                          samples = numSamples, 
+                          burn = numSamples/2,
+                          verbose = TRUE),
+    model_var = "model",
+    output_format = "samples",
+    packages = c("./utils")
+  )
+
+res.mixed %>%
+  gather(parameter, value, b_0, b_1, sigma_error, sigma_item, sigma_subj) %>%
+  ggplot(aes(x = value))+
+    geom_histogram()+
+    facet_wrap(~parameter, scales = 'free')
+
+res.mixed %>% 
+  gather(parameter, value, b_0, b_1, sigma_error, sigma_item, sigma_subj) %>%
+  group_by(parameter) %>%
+  summarize(mode = estimate_mode(value),
+            md_lo = round(HPDlo(value), 3),
+            md_hi = round(HPDhi(value), 3))
+
+```
+
+Note that the Bayesian approach explicitly uses a generative model. Try writing the graphical model for this model.
+
+# Plot predictives
+
+```{r}
+modelVsData <- res.mixed %>%
+  select(-sigma_error, -sigma_item, -sigma_subj, -b_0, -b_1) %>%
+  gather(parameter, value) %>%
+  group_by(parameter) %>%
+  summarize(MAP = estimate_mode(value)) %>%
+#           credHigh = HPDhi(value),
+#           credLow = HPDlo(value))
+  mutate(rowNum = as.integer(substr(parameter, 2, 5))) %>%
+  left_join(GibsonWuData, by = c("rowNum")) 
+
+ggplot(modelVsData, aes(x = MAP,  y = log(rt))) +
+  geom_point(aes(color = type)) +
+ # geom_smooth(method = "lm") +
+  geom_abline(slope = 1, intercept = 0, linetype = 2)+
+  ylab("empirical RT") +
+  xlab("model posterior predictive (MAP)") +
+  theme_bw() 
+```
+
+Not bad! The dotted line indicates the values where the model posterior predictive is equal to the empirical value. A good model will make predictions as close to this line as possible, and we see that that most of our points are clustered around the line at least. What makes this a better fit than the fixed effects model above? Do you think it's fair to interpret the effect of red vs. blue in this model? 
+
+# Compare to lmer 
+
+```{r}
+summary(lmer(log(rt) ~ so + (1 | subj) + (1 | item), data = GibsonWuData))
+```
+
+Compare the table of modes and credible intervals you made above with this lmer output: what do the sigmas correspond to? What do b_0 and b_1 correspond to? 
+

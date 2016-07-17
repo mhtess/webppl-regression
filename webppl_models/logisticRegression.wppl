@@ -1,0 +1,27 @@
+var logisticFunction = function(y) {
+   return 1 / (1 + exp(-y));
+};
+
+var model = function() {
+  var m = sample(UniformDrift({a:-200, b:200, r: 5}));
+  var b = sample(UniformDrift({a:-200, b:200, r: 5}));
+  var sigma = sample(UniformDrift({a:0, b:200, r:2}));
+
+  var linearFunction = function(x){
+    return m*x + b;
+  };
+  
+  foreach(observed_data, function(dataPoint){
+    var x = dataPoint["x"];
+    var y = dataPoint["y"];
+    var predictedY = linearFunction(x);
+    var predictedY_withNoise = sample(Gaussian({mu:predictedY, sigma: sigma}));
+    var logistic_Y = logisticFunction(predictedY_withNoise);
+    observe({
+      data: y,
+      link: Bernoulli({p: logistic_Y})
+    });
+  });
+
+  return {slope: m, intercept: b, noise: sigma};
+};
